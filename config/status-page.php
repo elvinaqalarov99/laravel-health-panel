@@ -14,6 +14,25 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Brand colour
+    |--------------------------------------------------------------------------
+    | Hex colour used for the status hero bar, active filter buttons, and the
+    | operational dot. Accepts any valid 6-digit hex value (with or without #).
+    */
+    'brand_color'    => env('STATUS_PAGE_BRAND_COLOR', '#2563eb'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Brand logo URL
+    |--------------------------------------------------------------------------
+    | Optional. When set, an <img> tag is shown in the header and footer instead
+    | of the plain app name text. Use an absolute URL or an asset() path.
+    | Leave null to show the app name as text.
+    */
+    'brand_logo_url' => env('STATUS_PAGE_LOGO_URL', null),
+
+    /*
+    |--------------------------------------------------------------------------
     | Routes
     |--------------------------------------------------------------------------
     */

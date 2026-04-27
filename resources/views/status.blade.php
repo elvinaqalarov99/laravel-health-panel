@@ -1,74 +1,452 @@
+@php
+    $color    = config('status-page.brand_color', '#2563eb');
+    $colorHex = ltrim($color, '#');
+    $colorR   = hexdec(substr($colorHex, 0, 2));
+    $colorG   = hexdec(substr($colorHex, 2, 2));
+    $colorB   = hexdec(substr($colorHex, 4, 2));
+    $logoUrl  = config('status-page.brand_logo_url');
+
+    $heroStatus = match($overallStatus) {
+        'warning' => ['cls' => 'warning', 'text' => 'Partial Service Disruption'],
+        'failed'  => ['cls' => 'down',    'text' => 'Major Service Outage'],
+        default   => ['cls' => 'ok',      'text' => 'All Systems Operational'],
+    };
+@endphp
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ config('app.name') }} — Status</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <title>System Status — {{ config('app.name') }}</title>
+    <meta name="description"
+          content="Live system status for {{ config('app.name') }} — current uptime, incidents, and service health.">
+    <link rel="canonical" href="{{ url()->current() }}">
+
+    <style>
+        :root {
+            --brand: {{ $color }};
+            --brand-rgb: {{ $colorR }}, {{ $colorG }},{{ $colorB }};
+        }
+
+        *, *::before, *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+            background: #f8fafc;
+            color: #0f172a;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        a { color: inherit; text-decoration: none; }
+
+        .container { max-width: 820px; margin: 0 auto; padding: 0 24px; }
+
+        /* ── Page Header ──────────────────────────────────── */
+        .page-header {
+            background: #fff;
+            border-bottom: 1px solid #e2e8f0;
+            padding: 16px 0;
+        }
+        .page-header .container { text-align: center; }
+        .page-header-logo-text {
+            font-size: 18px;
+            font-weight: 700;
+            color: #0f172a;
+            letter-spacing: -0.02em;
+        }
+
+        /* ── Status Hero ──────────────────────────────────── */
+        .status-hero { padding: 32px 0; }
+        .status-hero--ok      { background: var(--brand); }
+        .status-hero--warning { background: #d97706; }
+        .status-hero--down    { background: #dc2626; }
+
+        .status-hero-inner {
+            display: flex;
+            align-items: center;
+            gap: 18px;
+        }
+
+        .status-hero-icon {
+            width: 52px;
+            height: 52px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.22);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            flex-shrink: 0;
+        }
+
+        .status-hero-title {
+            font-size: 24px;
+            font-weight: 700;
+            color: #fff;
+            letter-spacing: -0.02em;
+            line-height: 1.2;
+        }
+
+        .status-hero-time {
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.78);
+            margin-top: 5px;
+        }
+
+        /* ── Main ─────────────────────────────────────────── */
+        .main { flex: 1; padding: 36px 0 80px; }
+
+        /* ── Section ──────────────────────────────────────── */
+        .section { margin-bottom: 36px; }
+
+        .section-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 14px;
+            gap: 12px;
+        }
+
+        .section-label {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #64748b;
+        }
+
+        .history-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 12px;
+            font-weight: 500;
+            color: #64748b;
+            padding: 5px 10px;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            background: #fff;
+            transition: background 0.15s, color 0.15s;
+            white-space: nowrap;
+        }
+        .history-link:hover { background: #f1f5f9; color: #334155; }
+
+        /* ── Services Card ────────────────────────────────── */
+        .services-card {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        /* ── Service Item ─────────────────────────────────── */
+        .svc-item { border-bottom: 1px solid #f1f5f9; }
+        .svc-item:last-child { border-bottom: none; }
+
+        .svc-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+        }
+
+        .svc-name { font-size: 15px; font-weight: 500; color: #0f172a; }
+
+        /* ── Status badge ─────────────────────────────────── */
+        .svc-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 13px;
+            font-weight: 500;
+        }
+        .svc-status--operational { color: var(--brand); }
+        .svc-status--degraded    { color: #d97706; }
+        .svc-status--down        { color: #dc2626; }
+
+        .svc-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: currentColor;
+            flex-shrink: 0;
+        }
+
+        @keyframes pulse-brand {
+            0%   { box-shadow: 0 0 0 0 rgba(var(--brand-rgb), 0.45); }
+            70%  { box-shadow: 0 0 0 6px rgba(var(--brand-rgb), 0); }
+            100% { box-shadow: 0 0 0 0 rgba(var(--brand-rgb), 0); }
+        }
+        .svc-dot--pulse { animation: pulse-brand 2.5s ease-in-out infinite; }
+
+        /* ── Sub-checks ───────────────────────────────────── */
+        .sub-toggle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 20px 10px;
+            font-size: 12px;
+            color: #94a3b8;
+            cursor: pointer;
+            user-select: none;
+            border-top: 1px solid #f8fafc;
+            transition: color 0.15s;
+        }
+        .sub-toggle:hover   { color: #64748b; }
+        .sub-toggle--active { color: #64748b; }
+
+        .sub-toggle-icon {
+            font-size: 8px;
+            display: inline-block;
+            transition: transform 0.2s;
+        }
+        .sub-toggle-icon.open { transform: rotate(90deg); }
+
+        .sub-body {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+        }
+        .sub-body.open {
+            max-height: 1200px;
+            transition: max-height 0.35s ease-in;
+        }
+
+        .sub-list { padding: 4px 20px 10px; border-top: 1px solid #f1f5f9; }
+
+        .sub-check {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 9px 0;
+            border-bottom: 1px solid #f8fafc;
+        }
+        .sub-check:last-child { border-bottom: none; }
+        .sub-check-name { font-size: 13px; color: #374151; }
+
+        .check-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        .check-badge-dot {
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: currentColor;
+            flex-shrink: 0;
+        }
+        .check-badge--ok      { background: rgba(var(--brand-rgb), 0.08); color: var(--brand); }
+        .check-badge--failed  { background: #fef2f2; color: #dc2626; }
+        .check-badge--warning { background: #fffbeb; color: #d97706; }
+
+        /* ── Footer ───────────────────────────────────────── */
+        .page-footer {
+            background: #fff;
+            border-top: 1px solid #e2e8f0;
+            padding: 40px 0 48px;
+            text-align: center;
+        }
+        .page-footer-name { font-size: 13px; color: #94a3b8; }
+
+        /* ── Responsive ───────────────────────────────────── */
+        @media (max-width: 640px) {
+            .container { padding: 0 16px; }
+            .status-hero { padding: 24px 0; }
+            .status-hero-title { font-size: 20px; }
+            .status-hero-icon { width: 44px; height: 44px; }
+            .status-hero-inner { gap: 14px; }
+            .svc-row { padding: 14px 16px; }
+            .sub-toggle { padding-left: 16px; padding-right: 16px; }
+            .sub-list { padding: 4px 16px 10px; }
+            .section-head { flex-direction: column; align-items: flex-start; }
+        }
+    </style>
 </head>
-<body class="bg-gray-950 text-gray-100 min-h-screen font-sans antialiased">
+<body>
 
-<div class="max-w-3xl mx-auto px-4 py-16">
-
-    {{-- Header --}}
-    <div class="mb-10">
-        <h1 class="text-2xl font-semibold tracking-tight">{{ config('app.name') }} Status</h1>
-        <p class="mt-1 text-sm text-gray-400">
-            Last checked: {{ $lastChecked->format('M j, Y · H:i') }} UTC
-        </p>
+{{-- Page Header --}}
+<header class="page-header">
+    <div class="container">
+        @if($logoUrl)
+            <img src="{{ $logoUrl }}" alt="{{ config('app.name') }}" class="page-header-logo" style="height:30px;display:inline-block;">
+        @else
+            <span class="page-header-logo-text">{{ config('app.name') }}</span>
+        @endif
     </div>
+</header>
 
-    {{-- Overall status banner --}}
-    @php
-        $bannerMap = [
-            'ok'      => ['bg' => 'bg-emerald-950 border-emerald-800', 'dot' => 'bg-emerald-400', 'text' => 'All Systems Operational'],
-            'warning' => ['bg' => 'bg-yellow-950 border-yellow-800',  'dot' => 'bg-yellow-400',  'text' => 'Partial System Degradation'],
-            'failed'  => ['bg' => 'bg-red-950 border-red-800',        'dot' => 'bg-red-500',      'text' => 'System Disruption Detected'],
-            'unknown' => ['bg' => 'bg-gray-900 border-gray-700',      'dot' => 'bg-gray-500',     'text' => 'Status Unknown'],
-        ];
-        $banner = $bannerMap[$overallStatus] ?? $bannerMap['unknown'];
-    @endphp
-    <div class="flex items-center gap-3 px-5 py-4 rounded-xl border {{ $banner['bg'] }} mb-8">
-        <span class="w-2.5 h-2.5 rounded-full {{ $banner['dot'] }}"></span>
-        <span class="font-medium">{{ $banner['text'] }}</span>
-    </div>
-
-    {{-- Services --}}
-    <div class="space-y-3">
-        @forelse ($services as $serviceKey => $service)
-            @php
-                $worstStatus = collect($service['checks'])->pluck('status')
-                    ->reduce(fn($carry, $s) => match(true) {
-                        $carry === 'failed' || $s === 'failed' => 'failed',
-                        $carry === 'warning' || $s === 'warning' => 'warning',
-                        default => 'ok',
-                    }, 'ok');
-
-                $dotMap = ['ok' => 'bg-emerald-400', 'warning' => 'bg-yellow-400', 'failed' => 'bg-red-500'];
-                $dot = $dotMap[$worstStatus] ?? 'bg-gray-500';
-                $statusLabel = ['ok' => 'Operational', 'warning' => 'Degraded', 'failed' => 'Outage'][$worstStatus] ?? 'Unknown';
-            @endphp
-            <div class="flex items-center justify-between px-5 py-4 rounded-xl bg-gray-900 border border-gray-800">
-                <div class="flex items-center gap-3">
-                    <span class="w-2 h-2 rounded-full {{ $dot }}"></span>
-                    <span class="text-sm font-medium">{{ $service['label'] }}</span>
-                </div>
-                <span class="text-xs text-gray-400">{{ $statusLabel }}</span>
+{{-- Status Hero --}}
+<div class="status-hero status-hero--{{ $heroStatus['cls'] }}">
+    <div class="container">
+        <div class="status-hero-inner">
+            <div class="status-hero-icon">
+                @if($heroStatus['cls'] === 'ok')
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                         stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                @elseif($heroStatus['cls'] === 'warning')
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                         stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+                        <line x1="12" y1="9" x2="12" y2="13"/>
+                        <line x1="12" y1="17" x2="12.01" y2="17"/>
+                    </svg>
+                @else
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                         stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"/>
+                        <line x1="15" y1="9" x2="9" y2="15"/>
+                        <line x1="9" y1="9" x2="15" y2="15"/>
+                    </svg>
+                @endif
             </div>
-        @empty
-            <p class="text-sm text-gray-500 text-center py-8">No services configured.</p>
-        @endforelse
+            <div>
+                <div class="status-hero-title">{{ $heroStatus['text'] }}</div>
+                @if($lastChecked)
+                    <div class="status-hero-time">
+                        Updated
+                        <span class="js-time" data-ts="{{ $lastChecked->toIso8601String() }}">{{ $lastChecked->format('Y-m-d H:i') }} UTC</span>
+                    </div>
+                @endif
+            </div>
+        </div>
     </div>
-
-    {{-- History link --}}
-    <div class="mt-10 text-center">
-        <a href="{{ route('status-page.history') }}"
-           class="text-sm text-gray-400 hover:text-gray-200 transition-colors">
-            View incident history →
-        </a>
-    </div>
-
 </div>
 
+{{-- Main --}}
+<main class="main">
+    <div class="container">
+
+        <section class="section">
+            <div class="section-head">
+                <h2 class="section-label">Current Status</h2>
+                <a href="{{ route('status-page.history') }}" class="history-link">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                         stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"/>
+                        <polyline points="12 6 12 12 16 14"/>
+                    </svg>
+                    View history
+                </a>
+            </div>
+
+            <div class="services-card">
+                @foreach($services as $serviceKey => $service)
+                    @php
+                        $svcStatus = 'operational';
+                        foreach ($service['checks'] as $chk) {
+                            if ($chk['status'] === 'failed') { $svcStatus = 'down'; break; }
+                            if ($chk['status'] === 'warning' && $svcStatus !== 'down') $svcStatus = 'degraded';
+                        }
+                        $visibleChecks = array_values(array_filter($service['checks'] ?? [], fn($c) => ($c['status'] ?? '') !== 'skipped'));
+                        $hasSubChecks  = !empty($visibleChecks);
+                        $subOpen       = $hasSubChecks && $svcStatus !== 'operational';
+                    @endphp
+                    <div class="svc-item">
+                        <div class="svc-row">
+                            <span class="svc-name">{{ $service['label'] }}</span>
+                            <span class="svc-status svc-status--{{ $svcStatus }}">
+                                <span class="svc-dot {{ $svcStatus === 'operational' ? 'svc-dot--pulse' : '' }}"></span>
+                                @if($svcStatus === 'operational')
+                                    Operational
+                                @elseif($svcStatus === 'degraded')
+                                    Degraded
+                                @else
+                                    Down
+                                @endif
+                            </span>
+                        </div>
+
+                        @if($hasSubChecks)
+                            <div class="sub-toggle {{ $svcStatus !== 'operational' ? 'sub-toggle--active' : '' }}"
+                                 onclick="toggleChecks(this)">
+                                <span class="sub-toggle-icon {{ $subOpen ? 'open' : '' }}">▶</span>
+                                <span>{{ count($visibleChecks) }} {{ count($visibleChecks) === 1 ? 'service' : 'services' }}</span>
+                            </div>
+                            <div class="sub-body {{ $subOpen ? 'open' : '' }}">
+                                <div class="sub-list">
+                                    @foreach($visibleChecks as $chk)
+                                        @php $cs = in_array($chk['status'] ?? '', ['ok','failed','warning']) ? $chk['status'] : 'ok'; @endphp
+                                        <div class="sub-check">
+                                            <span class="sub-check-name">{{ $chk['label'] ?? $chk['check_name'] }}</span>
+                                            <span class="check-badge check-badge--{{ $cs }}">
+                                                <span class="check-badge-dot"></span>
+                                                {{ $cs === 'ok' ? 'Operational' : ucfirst($cs) }}
+                                            </span>
+                                        </div>
+                                    @endforeach
+                                </div>
+                            </div>
+                        @endif
+                    </div>
+                @endforeach
+            </div>
+        </section>
+
+    </div>
+</main>
+
+{{-- Footer --}}
+<footer class="page-footer">
+    <div class="container">
+        @if($logoUrl)
+            <img src="{{ $logoUrl }}" alt="{{ config('app.name') }}" style="height:22px;opacity:0.5;display:inline-block;">
+        @else
+            <span class="page-footer-name">{{ config('app.name') }}</span>
+        @endif
+    </div>
+</footer>
+
+<script>
+    (function () {
+        'use strict';
+
+        function updateTimestamps() {
+            document.querySelectorAll('.js-time[data-ts]').forEach(function (el) {
+                const ts = el.getAttribute('data-ts');
+                if (!ts) return;
+                try {
+                    el.textContent = new Date(ts).toLocaleString('en-US', {
+                        weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
+                        hour: '2-digit', minute: '2-digit', hour12: false,
+                        timeZone: 'UTC', timeZoneName: 'short'
+                    });
+                } catch (e) {}
+            });
+        }
+
+        window.toggleChecks = function (el) {
+            const icon = el.querySelector('.sub-toggle-icon');
+            const body = el.nextElementSibling;
+            if (body && body.classList.contains('sub-body')) {
+                const open = body.classList.toggle('open');
+                if (icon) icon.classList.toggle('open', open);
+            }
+        };
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', updateTimestamps);
+        } else {
+            updateTimestamps();
+        }
+
+        setTimeout(function () { location.reload(); }, 60000);
+    })();
+</script>
 </body>
 </html>
