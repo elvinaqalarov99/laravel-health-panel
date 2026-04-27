@@ -1,7 +1,7 @@
 # laravel-health-panel
 
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/elvinaqalarov99/laravel-health-panel.svg?style=flat-square)](https://packagist.org/packages/elvinaqalarov99/laravel-health-panel)
-[![License](https://img.shields.io/github/license/elvinaqalarov99/laravel-health-panel.svg?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/github/license/elvinaqalarov99/-laravel-health-panel.svg?style=flat-square)](LICENSE)
 
 A beautiful, config-driven status panel for Laravel built on top of [spatie/laravel-health](https://spatie.be/docs/laravel-health/v1/introduction).
 
