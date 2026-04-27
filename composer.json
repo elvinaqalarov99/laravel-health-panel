@@ -1,0 +1,41 @@
+{
+    "name": "elvinaqalarov99/laravel-status-page",
+    "description": "A beautiful, config-driven status page for Laravel apps powered by spatie/laravel-health.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["laravel", "status-page", "health", "monitoring"],
+    "authors": [
+        {
+            "name": "Elvin Agalarov",
+            "email": "elvin.aghalarov@afea-group.com"
+        }
+    ],
+    "require": {
+        "php": "^8.2",
+        "illuminate/support": "^11.0|^12.0",
+        "spatie/laravel-health": "^1.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^9.0",
+        "pestphp/pest": "^3.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Elvinaqalarov99\\StatusPage\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Elvinaqalarov99\\StatusPage\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Elvinaqalarov99\\StatusPage\\StatusPageServiceProvider"
+            ]
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
