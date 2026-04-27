@@ -1,9 +1,9 @@
 {
-    "name": "elvinaqalarov99/laravel-status-page",
-    "description": "A beautiful, config-driven status page for Laravel apps powered by spatie/laravel-health.",
+    "name": "elvinaqalarov99/laravel-health-panel",
+    "description": "A config-driven status panel for Laravel apps built on top of spatie/laravel-health.",
     "type": "library",
     "license": "MIT",
-    "keywords": ["laravel", "status-page", "health", "monitoring"],
+    "keywords": ["laravel", "status-page", "health", "monitoring", "spatie", "panel"],
     "authors": [
         {
             "name": "Elvin Agalarov",

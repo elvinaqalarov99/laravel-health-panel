@@ -1,11 +1,11 @@
-# laravel-status-page
+# laravel-health-panel
 
-A config-driven, zero-boilerplate status page for Laravel apps powered by [spatie/laravel-health](https://github.com/spatie/laravel-health).
+A config-driven status panel for Laravel apps built on top of [spatie/laravel-health](https://spatie.be/docs/laravel-health/v1/introduction).
 
 ## Installation
 
 ```bash
-composer require elvinaqalarov99/laravel-status-page
+composer require elvinaqalarov99/laravel-health-panel
 php artisan vendor:publish --tag=status-page:config
 php artisan vendor:publish --tag=status-page:migrations
 php artisan migrate
