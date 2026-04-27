@@ -354,7 +354,7 @@
                             if ($chk['status'] === 'warning' && $svcStatus !== 'down') $svcStatus = 'degraded';
                         }
                         $visibleChecks = array_values(array_filter($service['checks'] ?? [], fn($c) => ($c['status'] ?? '') !== 'skipped'));
-                        $hasSubChecks  = !empty($visibleChecks);
+                        $hasSubChecks  = !empty($visibleChecks) && empty($service['hide_checks']);
                         $subOpen       = $hasSubChecks && $svcStatus !== 'operational';
                     @endphp
                     <div class="svc-item">

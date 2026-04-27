@@ -200,8 +200,9 @@ class StatusPageService implements StatusPageServiceContract
 
         foreach (array_keys($this->getEnabledServiceCheckMapping()) as $key) {
             $services[$key] = [
-                'label'  => $this->getServiceLabel($key),
-                'checks' => [],
+                'label'       => $this->getServiceLabel($key),
+                'hide_checks' => (bool) config("status-page.services.{$key}.hide_checks", false),
+                'checks'      => [],
             ];
         }
 
