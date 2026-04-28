@@ -6,6 +6,7 @@ use Carbon\Carbon;
 use Elvinaqalarov99\StatusPage\Contracts\StatusPageRepositoryContract;
 use Elvinaqalarov99\StatusPage\Enums\HealthCheckStatus;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 class StatusPageRepository implements StatusPageRepositoryContract
 {
@@ -82,5 +83,40 @@ class StatusPageRepository implements StatusPageRepositoryContract
             ->orderBy('created_at', 'asc')
             ->limit($limit)
             ->get();
+    }
+
+    public function getStatusTransitions(array $checkNames, Carbon $start, Carbon $end): Collection
+    {
+        if (empty($checkNames)) {
+            return collect();
+        }
+
+        $statuses           = [HealthCheckStatus::Ok->value, HealthCheckStatus::Warning->value, HealthCheckStatus::Failed->value];
+        $namePlaceholders   = implode(',', array_fill(0, count($checkNames), '?'));
+        $statusPlaceholders = implode(',', array_fill(0, count($statuses), '?'));
+
+        $rows = DB::select("
+            SELECT check_name, status, created_at
+            FROM (
+                SELECT
+                    check_name,
+                    status,
+                    created_at,
+                    LAG(status) OVER (PARTITION BY check_name ORDER BY created_at) AS prev_status
+                FROM health_check_result_history_items
+                WHERE check_name IN ({$namePlaceholders})
+                  AND status     IN ({$statusPlaceholders})
+                  AND created_at >= ?
+                  AND created_at <= ?
+            ) AS t
+            WHERE prev_status IS NULL OR status != prev_status
+            ORDER BY created_at ASC
+        ", [...$checkNames, ...$statuses, $start->toDateTimeString(), $end->toDateTimeString()]);
+
+        return collect($rows)->map(fn($row) => (object) [
+            'check_name' => $row->check_name,
+            'status'     => $row->status,
+            'created_at' => Carbon::parse($row->created_at),
+        ]);
     }
 }

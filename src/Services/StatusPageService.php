@@ -9,13 +9,9 @@ use Elvinaqalarov99\StatusPage\Enums\HealthCheckStatus;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
 
-class StatusPageService implements StatusPageServiceContract
+readonly class StatusPageService implements StatusPageServiceContract
 {
-    public function __construct(private readonly StatusPageRepositoryContract $repository) {}
-
-    // -------------------------------------------------------------------------
-    // Public API
-    // -------------------------------------------------------------------------
+    public function __construct(private StatusPageRepositoryContract $repository) {}
 
     public function getServicesWithStatus($checkResults): array
     {
@@ -58,19 +54,25 @@ class StatusPageService implements StatusPageServiceContract
 
     public function getUptimeBarData(int $days = 90): array
     {
-        $startDate = now()->subDays($days - 1)->startOfDay();
-        $rows      = $this->repository->getUptimeAggregation($this->getAllCheckNames(), $startDate);
-        $dateRange = $this->buildDateRange($days);
+        $startDate   = now()->subDays($days - 1)->startOfDay();
+        $endDate     = now();
+        $rows        = $this->repository->getUptimeAggregation($this->getAllCheckNames(), $startDate);
+        $transitions = $this->repository->getStatusTransitions($this->getAllCheckNames(), $startDate, $endDate);
+
+        $dateRange = [];
+        for ($i = $days - 1; $i >= 0; $i--) {
+            $dateRange[] = now()->subDays($i)->format('Y-m-d');
+        }
 
         $result = [];
         foreach ($this->getEnabledServiceCheckMapping() as $serviceKey => $checkNames) {
             $dayStatuses = $this->mergeServiceDayStatuses($rows, $checkNames);
-            [$segments, $okDays, $dataDays] = $this->buildUptimeSegments($dayStatuses, $dateRange);
+            $segments    = $this->buildUptimeSegments($dayStatuses, $dateRange);
 
             $result[$serviceKey] = [
-                'label'      => $this->getServiceLabel($serviceKey),
+                'name'       => config('health.service_names', [])[$serviceKey],
                 'segments'   => $segments,
-                'uptime_pct' => $dataDays > 0 ? round($okDays / $dataDays * 100, 2) : null,
+                'uptime_pct' => $this->calculateTimeBasedUptime($transitions, $checkNames, $endDate),
             ];
         }
 
@@ -143,10 +145,6 @@ class StatusPageService implements StatusPageServiceContract
     {
         return array_merge(...array_values($this->getEnabledServiceCheckMapping()));
     }
-
-    // -------------------------------------------------------------------------
-    // Config helpers
-    // -------------------------------------------------------------------------
 
     private function getEnabledServiceCheckMapping(): array
     {
@@ -289,28 +287,44 @@ class StatusPageService implements StatusPageServiceContract
     /** @return array{0: array, 1: int, 2: int} [segments, okDays, dataDays] */
     private function buildUptimeSegments(array $dayStatuses, array $dateRange): array
     {
-        $segments = [];
-        $okDays   = 0;
-        $dataDays = 0;
-
-        foreach ($dateRange as $date) {
-            $status     = $dayStatuses[$date] ?? null;
-            $segments[] = ['date' => $date, 'status' => $status];
-
-            if ($status !== null) {
-                $dataDays++;
-                if ($status === HealthCheckStatus::Ok->value) {
-                    $okDays++;
-                }
-            }
-        }
-
-        return [$segments, $okDays, $dataDays];
+        return array_map(
+            fn($date) => ['date' => $date, 'status' => $dayStatuses[$date] ?? null],
+            $dateRange,
+        );
     }
 
-    // -------------------------------------------------------------------------
-    // Incident history
-    // -------------------------------------------------------------------------
+    private function calculateTimeBasedUptime(
+        Collection $transitions,
+        array $checkNames,
+        Carbon $windowEnd,
+    ): ?float {
+        $serviceTransitions = $transitions->filter(
+            fn($row) => in_array($row->check_name, $checkNames, true),
+        );
+
+        if ($serviceTransitions->isEmpty()) {
+            return null;
+        }
+
+        $rawEvents = $this->extractRawEvents($serviceTransitions);
+        $incidents = $this->foldEventsIntoPairs($rawEvents);
+
+        $monitoringStart = $serviceTransitions->min(fn($row) => $row->created_at->timestamp);
+        $totalSeconds    = $windowEnd->timestamp - $monitoringStart;
+
+        if ($totalSeconds <= 0) {
+            return 100.0;
+        }
+
+        $downtimeSeconds = 0;
+        foreach ($incidents as $incident) {
+            $start            = max($incident['started_at']->timestamp, $monitoringStart);
+            $end              = min(($incident['resolved_at'] ?? $windowEnd)->timestamp, $windowEnd->timestamp);
+            $downtimeSeconds += max(0, $end - $start);
+        }
+
+        return round(max(0.0, min(100.0, ($totalSeconds - $downtimeSeconds) / $totalSeconds * 100)), 2);
+    }
 
     private function extractRawEvents(Collection $serviceItems): array
     {
