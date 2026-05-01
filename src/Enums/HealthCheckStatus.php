@@ -9,4 +9,5 @@ enum HealthCheckStatus: string
     case Warning  = 'warning';
     case Skipped  = 'skipped';
     case Resolved = 'resolved'; // synthetic — used for event-stream transitions, not stored in DB
+    case Unknown  = 'unknown';   // synthetic — used for event-stream transitions, not stored in DB
 }

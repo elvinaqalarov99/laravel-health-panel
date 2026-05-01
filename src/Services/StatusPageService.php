@@ -6,44 +6,53 @@ use Carbon\Carbon;
 use Elvinaqalarov99\StatusPage\Contracts\StatusPageRepositoryContract;
 use Elvinaqalarov99\StatusPage\Contracts\StatusPageServiceContract;
 use Elvinaqalarov99\StatusPage\Enums\HealthCheckStatus;
+use Exception;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
 
 readonly class StatusPageService implements StatusPageServiceContract
 {
+    private const INCIDENT_STABILITY_MINUTES = 15;
+
     public function __construct(private StatusPageRepositoryContract $repository) {}
 
     public function getServicesWithStatus($checkResults): array
     {
         $services     = $this->groupServices($checkResults);
         $latestChecks = $this->repository->getLatestByCheckNames($this->getAllCheckNames());
+        $services     = $this->hydrateLatestStatus($services, $latestChecks);
 
-        return $this->hydrateLatestStatus($services, $latestChecks);
+        foreach ($services as &$service) {
+            $service['status'] = $this->resolveServiceStatusFromChecks($service['checks']);
+        }
+        unset($service);
+
+        return $services;
     }
 
     public function getOverallStatus($checkResults): string
     {
         if (!$checkResults) {
-            return 'unknown';
+            return HealthCheckStatus::Unknown->value;
         }
 
         $hasFailed  = false;
         $hasWarning = false;
 
-        foreach ($checkResults->storedCheckResults as $result) {
-            $serviceKey     = $this->getServiceKeyForCheck($result->name);
-            $isDegradedOnly = $serviceKey && $this->isDegradedOnly($serviceKey);
+        foreach ($checkResults->storedCheckResults as $checkResult) {
+            $status    = $checkResult->status;
+            $checkName = $checkResult->name;
 
-            if ($isDegradedOnly) {
-                if (in_array($result->status, [HealthCheckStatus::Failed->value, HealthCheckStatus::Warning->value])) {
+            if (in_array($checkName, config('health.degraded_only', []), true)) {
+                if ($status === HealthCheckStatus::Failed->value || $status === HealthCheckStatus::Warning->value) {
                     $hasWarning = true;
                 }
             } else {
-                match ($result->status) {
-                    HealthCheckStatus::Failed->value  => $hasFailed = true,
-                    HealthCheckStatus::Warning->value => $hasWarning = true,
-                    default => null,
-                };
+                if ($status === HealthCheckStatus::Failed->value) {
+                    $hasFailed = true;
+                } elseif ($status === HealthCheckStatus::Warning->value) {
+                    $hasWarning = true;
+                }
             }
         }
 
@@ -54,10 +63,12 @@ readonly class StatusPageService implements StatusPageServiceContract
 
     public function getUptimeBarData(int $days = 90): array
     {
-        $startDate   = now()->subDays($days - 1)->startOfDay();
-        $endDate     = now();
-        $rows        = $this->repository->getUptimeAggregation($this->getAllCheckNames(), $startDate);
-        $transitions = $this->repository->getStatusTransitions($this->getAllCheckNames(), $startDate, $endDate);
+        $startDate    = now()->subDays($days - 1)->startOfDay();
+        $endDate      = now();
+        $today        = now()->format('Y-m-d');
+        $rows         = $this->repository->getUptimeAggregation($this->getAllCheckNames(), $startDate);
+        $transitions  = $this->repository->getStatusTransitions($this->getAllCheckNames(), $startDate, $endDate);
+        $latestChecks = $this->repository->getLatestByCheckNames($this->getAllCheckNames());
 
         $dateRange = [];
         for ($i = $days - 1; $i >= 0; $i--) {
@@ -69,8 +80,17 @@ readonly class StatusPageService implements StatusPageServiceContract
             $dayStatuses = $this->mergeServiceDayStatuses($rows, $checkNames);
             $segments    = $this->buildUptimeSegments($dayStatuses, $dateRange);
 
+            // Today's bar uses live status so a resolved incident no longer shows as outage.
+            // Past days keep the historical worst-status (red = there was an outage that day).
+            $liveStatus = $this->resolveCurrentServiceStatus($latestChecks, $checkNames);
+            $lastIdx    = array_key_last($segments);
+
+            if ($liveStatus !== null && isset($segments[$lastIdx]) && $segments[$lastIdx]['date'] === $today) {
+                $segments[$lastIdx]['status'] = $liveStatus;
+            }
+
             $result[$serviceKey] = [
-                'name'       => config('health.service_names', [])[$serviceKey],
+                'name'       => $this->getServiceLabel($serviceKey),
                 'segments'   => $segments,
                 'uptime_pct' => $this->calculateTimeBasedUptime($transitions, $checkNames, $endDate),
             ];
@@ -82,6 +102,7 @@ readonly class StatusPageService implements StatusPageServiceContract
     public function getIncidentHistory(string $dateFilter, ?string $customDate): array
     {
         [$startDate, $endDate] = $this->getFullDateRange($dateFilter, $customDate);
+
         $allItems  = $this->repository->getHistoryRange($this->getAllCheckNames(), $startDate, $endDate);
         $incidents = [];
 
@@ -92,7 +113,9 @@ readonly class StatusPageService implements StatusPageServiceContract
                 continue;
             }
 
-            foreach ($this->mergeNoisyIncidents($this->extractRawEvents($serviceItems), $this->getServiceLabel($serviceKey)) as $pair) {
+            $rawEvents = $this->extractRawEvents($serviceItems);
+
+            foreach ($this->mergeNoisyIncidents($rawEvents, $this->getServiceLabel($serviceKey)) as $pair) {
                 $incidents[] = $pair;
             }
         }
@@ -104,7 +127,7 @@ readonly class StatusPageService implements StatusPageServiceContract
 
     public function paginateIncidents(array $incidents, int $page): LengthAwarePaginator
     {
-        $perPage = (int) config('status-page.incidents_per_page', 7);
+        $perPage = (int) config('health.incidents_per_page', 7);
 
         $groupedByDate = collect($incidents)
             ->groupBy(fn($i) => $i['started_at']->format('Y-m-d'))
@@ -136,7 +159,7 @@ readonly class StatusPageService implements StatusPageServiceContract
                 return null;
             }
             return $parsed->format('Y-m-d');
-        } catch (\Exception) {
+        } catch (Exception) {
             return null;
         }
     }
@@ -148,30 +171,25 @@ readonly class StatusPageService implements StatusPageServiceContract
 
     private function getEnabledServiceCheckMapping(): array
     {
-        return collect(config('status-page.services', []))
-            ->filter(fn($s) => (bool) ($s['enabled'] ?? true))
-            ->mapWithKeys(fn($s, $key) => [$key => $s['checks'] ?? []])
-            ->all();
-    }
+        $disabledChecks = array_keys(array_filter(
+            config('health.checks', []),
+            fn($enabled) => !$enabled,
+        ));
 
-    private function getServiceLabel(string $serviceKey): string
-    {
-        return config("status-page.services.{$serviceKey}.label", $serviceKey);
-    }
+        if (empty($disabledChecks)) {
+            return config('health.mappings', []);
+        }
 
-    private function isDegradedOnly(string $serviceKey): bool
-    {
-        return (bool) config("status-page.services.{$serviceKey}.degraded_only", false);
-    }
+        $filtered = [];
+        foreach (config('health.mappings', []) as $service => $checks) {
+            $enabled = array_values(array_diff($checks, $disabledChecks));
+            if (!empty($enabled)) {
+                $filtered[$service] = $enabled;
+            }
+        }
 
-    private function getCheckLabel(string $checkName): string
-    {
-        return config("status-page.check_labels.{$checkName}", $this->formatCheckName($checkName));
+        return $filtered;
     }
-
-    // -------------------------------------------------------------------------
-    // Service grouping
-    // -------------------------------------------------------------------------
 
     private function groupServices($checkResults): array
     {
@@ -198,9 +216,9 @@ readonly class StatusPageService implements StatusPageServiceContract
 
         foreach (array_keys($this->getEnabledServiceCheckMapping()) as $key) {
             $services[$key] = [
-                'label'       => $this->getServiceLabel($key),
-                'hide_checks' => (bool) config("status-page.services.{$key}.hide_checks", false),
+                'name'        => $this->getServiceLabel($key),
                 'checks'      => [],
+                'hide_checks' => true,
             ];
         }
 
@@ -211,12 +229,13 @@ readonly class StatusPageService implements StatusPageServiceContract
     {
         foreach ($services as &$service) {
             foreach ($service['checks'] as &$check) {
-                $latest = $latestChecks->get($check['check_name']);
+                $checkName   = $check['check_name'] ?? $this->getCheckNameFromLabel($check['name'], $check['label'] ?? null);
+                $latestCheck = $latestChecks->get($checkName);
 
-                if ($latest) {
-                    $check['status']  = $latest->status;
-                    $check['summary'] = $latest->short_summary ?? $check['summary'] ?? '';
-                    $check['message'] = $latest->notification_message ?? $check['message'] ?? '';
+                if ($latestCheck) {
+                    $check['status']  = $latestCheck->status;
+                    $check['summary'] = $latestCheck->short_summary ?? $check['summary'] ?? '';
+                    $check['message'] = $latestCheck->notification_message ?? $check['message'] ?? '';
                 }
             }
         }
@@ -226,9 +245,12 @@ readonly class StatusPageService implements StatusPageServiceContract
 
     private function buildCheckData($checkResult): array
     {
+        $checkName = $checkResult->name;
+
         return [
-            'check_name' => $checkResult->name,
-            'label'      => $checkResult->label ?? $this->getCheckLabel($checkResult->name),
+            'name'       => $this->formatCheckName($checkName),
+            'check_name' => $checkName,
+            'label'      => $checkResult->label ?? config('health.labels', [])[$checkName] ?? $this->formatCheckName($checkName),
             'status'     => $checkResult->status,
             'summary'    => $checkResult->shortSummary ?? '',
             'message'    => $checkResult->notificationMessage ?? '',
@@ -251,17 +273,30 @@ readonly class StatusPageService implements StatusPageServiceContract
         return str($name)->replace('_', ' ')->title()->toString();
     }
 
-    // -------------------------------------------------------------------------
-    // Uptime bar data
-    // -------------------------------------------------------------------------
-
-    private function buildDateRange(int $days): array
+    private function getServiceLabel(string $serviceKey): string
     {
-        $range = [];
-        for ($i = $days - 1; $i >= 0; $i--) {
-            $range[] = now()->subDays($i)->format('Y-m-d');
+        return config('health.service_names', [])[$serviceKey] ?? $serviceKey;
+    }
+
+    private function getCheckNameFromLabel(string $name, ?string $label): string
+    {
+        if ($label) {
+            foreach (config('health.labels', []) as $checkName => $checkLabel) {
+                if ($checkLabel === $label) {
+                    return $checkName;
+                }
+            }
         }
-        return $range;
+
+        $formattedName = str($name)->replace(' ', '')->toString();
+
+        foreach (config('health.labels', []) as $checkName => $checkLabel) {
+            if (str($checkName)->replace('_', ' ')->title()->toString() === $name) {
+                return $checkName;
+            }
+        }
+
+        return $formattedName;
     }
 
     private function mergeServiceDayStatuses(Collection $rows, array $checkNames): array
@@ -273,18 +308,19 @@ readonly class StatusPageService implements StatusPageServiceContract
                 $d       = $row->day;
                 $current = $dayStatuses[$d] ?? HealthCheckStatus::Ok->value;
 
-                $dayStatuses[$d] = match (true) {
-                    $row->worst_status === HealthCheckStatus::Failed->value || $current === HealthCheckStatus::Failed->value => HealthCheckStatus::Failed->value,
-                    $row->worst_status === HealthCheckStatus::Warning->value || $current === HealthCheckStatus::Warning->value => HealthCheckStatus::Warning->value,
-                    default => HealthCheckStatus::Ok->value,
-                };
+                if ($row->worst_status === HealthCheckStatus::Failed->value || $current === HealthCheckStatus::Failed->value) {
+                    $dayStatuses[$d] = HealthCheckStatus::Failed->value;
+                } elseif ($row->worst_status === HealthCheckStatus::Warning->value || $current === HealthCheckStatus::Warning->value) {
+                    $dayStatuses[$d] = HealthCheckStatus::Warning->value;
+                } else {
+                    $dayStatuses[$d] = HealthCheckStatus::Ok->value;
+                }
             }
         }
 
         return $dayStatuses;
     }
 
-    /** @return array{0: array, 1: int, 2: int} [segments, okDays, dataDays] */
     private function buildUptimeSegments(array $dayStatuses, array $dateRange): array
     {
         return array_map(
@@ -368,7 +404,47 @@ readonly class StatusPageService implements StatusPageServiceContract
         return $status;
     }
 
-    private function mergeNoisyIncidents(array $rawEvents, string $serviceLabel): array
+    private function resolveServiceStatusFromChecks(array $checks): string
+    {
+        $degradedOnly = config('health.degraded_only', []);
+        $worstStatus  = 'operational';
+
+        foreach ($checks as $check) {
+            $status = $check['status'] ?? '';
+
+            if ($status === HealthCheckStatus::Skipped->value) {
+                continue;
+            }
+
+            $isDegradedOnly = in_array($check['check_name'] ?? '', $degradedOnly, true);
+
+            if ($status === HealthCheckStatus::Failed->value && ! $isDegradedOnly) {
+                return 'outage';
+            }
+
+            if ($status === HealthCheckStatus::Failed->value || $status === HealthCheckStatus::Warning->value) {
+                $worstStatus = 'degraded';
+            }
+        }
+
+        return $worstStatus;
+    }
+
+    private function resolveCurrentServiceStatus(Collection $latestChecks, array $checkNames): ?string
+    {
+        $statuses = [];
+
+        foreach ($checkNames as $checkName) {
+            $check = $latestChecks->get($checkName);
+            if ($check && $check->status !== HealthCheckStatus::Skipped->value) {
+                $statuses[] = $check->status;
+            }
+        }
+
+        return $statuses ? $this->resolveServiceStatus($statuses) : null;
+    }
+
+    private function mergeNoisyIncidents(array $rawEvents, string $serviceName): array
     {
         $incidents = [];
 
@@ -383,7 +459,10 @@ readonly class StatusPageService implements StatusPageServiceContract
             $incidents[] = $pair;
         }
 
-        return array_map(fn(array $pair) => ['service' => $serviceLabel] + $pair, $incidents);
+        return array_map(
+            fn(array $pair) => ['service' => $serviceName] + $pair,
+            $incidents,
+        );
     }
 
     private function foldEventsIntoPairs(array $rawEvents): array
@@ -421,8 +500,9 @@ readonly class StatusPageService implements StatusPageServiceContract
             return false;
         }
 
-        return ($next['started_at']->timestamp - $previous['resolved_at']->timestamp) / 60
-            <= config('status-page.incident_stability_minutes', 15);
+        $gapMinutes = ($next['started_at']->timestamp - $previous['resolved_at']->timestamp) / 60;
+
+        return $gapMinutes <= self::INCIDENT_STABILITY_MINUTES;
     }
 
     private function getFullDateRange(string $dateFilter, ?string $customDate): array
@@ -430,12 +510,11 @@ readonly class StatusPageService implements StatusPageServiceContract
         $now = Carbon::now();
 
         if ($customDate) {
-            $end = Carbon::parse($customDate)->endOfDay();
-            return [$end->copy()->startOfDay(), $end];
+            $endDate = Carbon::parse($customDate)->endOfDay();
+            return [$endDate->copy()->startOfDay(), $endDate];
         }
 
         return match ($dateFilter) {
-            'last_7_days'  => [$now->copy()->subDays(7)->startOfDay(), $now],
             'last_30_days' => [$now->copy()->subDays(30)->startOfDay(), $now],
             'today'        => [$now->copy()->startOfDay(), $now],
             'yesterday'    => [$now->copy()->subDay()->startOfDay(), $now->copy()->subDay()->endOfDay()],

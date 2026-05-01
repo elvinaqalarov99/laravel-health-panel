@@ -1,11 +1,13 @@
 @php
     use Carbon\Carbon;
-    $color    = config('status-page.brand_color', '#2563eb');
-    $colorHex = ltrim($color, '#');
-    $colorR   = hexdec(substr($colorHex, 0, 2));
-    $colorG   = hexdec(substr($colorHex, 2, 2));
-    $colorB   = hexdec(substr($colorHex, 4, 2));
-    $logoUrl  = config('status-page.brand_logo_url');
+    $color      = config('status-page.brand_color', '#2563eb');
+    $colorHex   = ltrim($color, '#');
+    $colorR     = hexdec(substr($colorHex, 0, 2));
+    $colorG     = hexdec(substr($colorHex, 2, 2));
+    $colorB     = hexdec(substr($colorHex, 4, 2));
+    $logoUrl    = config('status-page.brand_logo_url');
+    $faviconUrl = config('status-page.brand_favicon_url');
+    $domain     = config('status-page.brand_domain');
 
     $filterLabel = match(true) {
         (bool) $customDate              => Carbon::parse($customDate)->format('M d, Y'),
@@ -23,7 +25,13 @@
     <title>Incident History — {{ config('app.name') }}</title>
     <meta name="description"
           content="Incident history for {{ config('app.name') }} — past service disruptions and outages.">
+    <meta name="robots" content="index,follow">
     <link rel="canonical" href="{{ url()->current() }}">
+
+    @if($faviconUrl)
+        <link rel="icon" type="image/x-icon" href="{{ $faviconUrl }}">
+    @endif
+    <meta name="theme-color" content="{{ $color }}">
 
     <style>
         :root {
@@ -477,6 +485,14 @@
         .page-footer-logo { height: 22px; opacity: 0.5; display: inline-block; transition: opacity 0.2s; }
         .page-footer-logo:hover { opacity: 0.8; }
         .page-footer-name { font-size: 13px; color: #94a3b8; }
+        .page-footer-domain {
+            display: block;
+            margin-top: 10px;
+            font-size: 13px;
+            color: #94a3b8;
+            transition: color 0.15s;
+        }
+        .page-footer-domain:hover { color: #475569; }
 
         /* ── Responsive ──────────────────────────────────── */
         @media (max-width: 640px) {
@@ -494,7 +510,13 @@
     <div class="container">
         <div class="page-header-inner">
             @if($logoUrl)
-                <img src="{{ $logoUrl }}" alt="{{ config('app.name') }}" class="page-header-logo">
+                @if($domain)
+                    <a href="https://{{ $domain }}/">
+                        <img src="{{ $logoUrl }}" alt="{{ config('app.name') }}" class="page-header-logo">
+                    </a>
+                @else
+                    <img src="{{ $logoUrl }}" alt="{{ config('app.name') }}" class="page-header-logo">
+                @endif
             @else
                 <span class="page-header-logo-text">{{ config('app.name') }}</span>
             @endif
@@ -553,7 +575,7 @@
                                         </svg>
                                     @endif
                                 </span>
-                                <span class="uptime-name">{{ $data['label'] }}</span>
+                                <span class="uptime-name">{{ $data['name'] }}</span>
                                 <span class="uptime-info-btn" tabindex="-1">
                                     i
                                     <span class="uptime-info-tip">Past 90 days</span>
@@ -637,6 +659,14 @@
                                 $statusLabel = $statusKey === 'failed' ? 'Outage' : 'Degraded';
                                 $startedAt   = $incident['started_at'];
                                 $resolvedAt  = $incident['resolved_at'] ?? null;
+
+                                $durationLabel = null;
+                                if ($resolvedAt) {
+                                    $secs = max(0, $resolvedAt->timestamp - $startedAt->timestamp);
+                                    $h    = (int) ($secs / 3600);
+                                    $m    = (int) (($secs % 3600) / 60);
+                                    $durationLabel = $h > 0 ? "{$h}h {$m}m" : ($m > 0 ? "{$m}m" : '<1m');
+                                }
                             @endphp
 
                             <div class="incident-item" onclick="toggleIncident(this)">
@@ -649,6 +679,9 @@
                                             <span class="incident-label incident-label--{{ $statusKey }}">
                                                 {{ $statusLabel }}
                                             </span>
+                                            @if($durationLabel)
+                                                <span class="incident-time" title="Duration">{{ $durationLabel }}</span>
+                                            @endif
                                             <span class="incident-time js-time-short"
                                                   data-ts="{{ $startedAt->toIso8601String() }}">
                                                 {{ $startedAt->format('H:i') }} UTC
@@ -680,7 +713,12 @@
                                                     <span class="tl-dot tl-dot--resolved"></span>
                                                 </div>
                                                 <div class="tl-content">
-                                                    <div class="tl-label">Resolved</div>
+                                                    <div class="tl-label">
+                                                        Resolved
+                                                        @if($durationLabel)
+                                                            <span style="font-weight:400;color:#94a3b8;margin-left:6px;">after {{ $durationLabel }}</span>
+                                                        @endif
+                                                    </div>
                                                     <div class="tl-time js-time-full"
                                                          data-ts="{{ $resolvedAt->toIso8601String() }}">
                                                         {{ $resolvedAt->format('D, M j, Y, H:i') }} UTC
@@ -751,7 +789,14 @@
 <footer class="page-footer">
     <div class="container">
         @if($logoUrl)
-            <img src="{{ $logoUrl }}" alt="{{ config('app.name') }}" class="page-footer-logo">
+            @if($domain)
+                <a href="https://{{ $domain }}/">
+                    <img src="{{ $logoUrl }}" alt="{{ config('app.name') }}" class="page-footer-logo">
+                </a>
+                <a href="https://{{ $domain }}/" class="page-footer-domain">www.{{ $domain }}</a>
+            @else
+                <img src="{{ $logoUrl }}" alt="{{ config('app.name') }}" class="page-footer-logo">
+            @endif
         @else
             <span class="page-footer-name">{{ config('app.name') }}</span>
         @endif
